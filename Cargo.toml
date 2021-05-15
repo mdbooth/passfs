@@ -8,4 +8,9 @@ edition = "2018"
 
 [dependencies]
 error-chain = "0.12.0"
-fuse = "0.3.1"
+fuser = "0.7.0"
+openat = "0.1.21"
+log = "0.4.14"
+simple_logger = "1.11.0"
+libc = "0.2.94"
+time = "0.1"
