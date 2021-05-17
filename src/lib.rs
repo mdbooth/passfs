@@ -377,7 +377,7 @@ fn stat_to_fileattr(stat: &stat) -> FileAttr {
 
     FileAttr {
         ino: stat.st_ino,
-        size: stat.st_ino,
+        size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
         atime: get_system_time(stat.st_atime),
         mtime: get_system_time(stat.st_mtime),
