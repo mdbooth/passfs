@@ -7,7 +7,7 @@ pub mod errors {
 use errors::*;
 
 use libc::stat;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -33,12 +33,24 @@ impl Fh {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 struct Inode(u64);
 
+#[derive(Debug)]
+struct InodeEntry {
+    rc: u64,
+    path: PathBuf,
+}
+
+impl InodeEntry {
+    fn new(rc: u64, path: PathBuf) -> InodeEntry {
+        InodeEntry { rc, path: PathBuf::from(path) }
+    }
+}
+
 pub struct PassFs {
     root: Dir,
     open_dirs: BTreeMap<Fh, (Dir, DirIter)>,
     open_files: BTreeMap<Fh, File>,
     inuse_fhs: BTreeSet<Fh>,
-    inode_map: BTreeMap<Inode, PathBuf>,
+    inode_map: BTreeMap<Inode, InodeEntry>,
 }
 
 impl PassFs {
@@ -52,7 +64,7 @@ impl PassFs {
             inuse_fhs: BTreeSet::new(),
             inode_map: BTreeMap::new(),
         };
-        passfs.inode_map.insert(Inode(1), PathBuf::from("."));
+        passfs.inode_map.insert(Inode(1), InodeEntry::new(1, ".".into()));
         Ok(passfs)
     }
 
@@ -74,7 +86,7 @@ impl PassFs {
 impl Filesystem for PassFs {
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         let path = match self.inode_map.get(&Inode(ino)) {
-            Some(path) => path,
+            Some(inode_entry) => &inode_entry.path,
             None => return reply.error(libc::ENOENT),
         };
 
@@ -94,7 +106,7 @@ impl Filesystem for PassFs {
             PathBuf::new()
         } else {
             match self.inode_map.get(&Inode(parent)) {
-                Some(path) => path.clone(),
+                Some(inode_entry) => inode_entry.path.clone(),
                 None => return reply.error(libc::ENOENT),
             }
         };
@@ -103,17 +115,41 @@ impl Filesystem for PassFs {
         let metadata = self.root.metadata(&path);
         match metadata {
             Ok(metadata) => {
-                let fileattr = stat_to_fileattr(&metadata.stat());
+                let stat = metadata.stat();
+                let fileattr = stat_to_fileattr(&stat);
+                self.inode_map
+                    .entry(Inode(fileattr.ino))
+                    .and_modify(|inode_entry| {
+                        inode_entry.rc += 1;
+                        debug!("lookup inode={}: rc={}", fileattr.ino, inode_entry.rc);
+                    })
+                    .or_insert(InodeEntry::new(0, path));
                 reply.entry(&Duration::new(0, 0), &fileattr, 0);
-                self.inode_map.insert(Inode(fileattr.ino), path);
             }
             Err(err) => reply.error(err.raw_os_error().unwrap_or(libc::EIO)),
         }
     }
 
+    fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
+        let inode = Inode(ino);
+        let rc = if let Entry::Occupied(mut inode_entry) = self.inode_map.entry(inode) {
+            let inode_entry = inode_entry.get_mut();
+            inode_entry.rc -= nlookup;
+            inode_entry.rc
+        } else {
+            return debug!("forget inode={}: doesn't exist", ino);
+        };
+
+        debug!("forget inode={}: rc={}", ino, rc);
+
+        if rc == 0 {
+            self.inode_map.remove(&inode);
+        }
+    }
+
     fn opendir(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
         let path = match self.inode_map.get(&Inode(ino)) {
-            Some(path) => path,
+            Some(inode_entry) => &inode_entry.path,
             None => return reply.error(libc::ENOENT),
         };
 
@@ -216,7 +252,7 @@ impl Filesystem for PassFs {
         }
 
         let path = match self.inode_map.get(&Inode(ino)) {
-            Some(path) => path,
+            Some(inode_entry) => &inode_entry.path,
             None => return reply.error(libc::ENOENT),
         };
 
