@@ -161,7 +161,6 @@ impl Filesystem for PassFs {
         for entry in diriter {
             match entry {
                 Ok(entry) => {
-                    debug!("Entry: {:?}", entry.file_name());
                     let kind = match entry.simple_type() {
                         Some(SimpleType::Symlink) => FileType::Symlink,
                         Some(SimpleType::Dir) => FileType::Directory,
@@ -189,11 +188,8 @@ impl Filesystem for PassFs {
                         // add returns true if the reply buffer is full
                         return reply.ok();
                     }
-                }
-                Err(err) => {
-                    debug!("Error: {}", err);
-                    return reply.error(err.raw_os_error().unwrap_or(libc::EIO));
-                }
+                },
+                Err(err) => return reply.error(err.raw_os_error().unwrap_or(libc::EIO)),
             }
         }
         reply.ok()
@@ -214,7 +210,6 @@ impl Filesystem for PassFs {
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let mask = libc::O_APPEND | libc::O_CREAT | libc::O_TRUNC;
-        debug! {"Flags: {:o}, Mask: {:o}", flags, mask};
 
         if flags & mask != 0 {
             return reply.error(libc::EROFS);
@@ -265,12 +260,9 @@ impl Filesystem for PassFs {
             return reply.error(err.raw_os_error().unwrap_or(libc::EIO));
         }
 
-        debug!("File: {:?}", file);
-
         let mut buffer = vec![0u8; size as usize];
         let mut pos = 0;
         while pos < buffer.len() {
-            debug!("Buflen: {}", buffer.len());
             match file.read(&mut buffer[pos..]) {
                 Ok(0) => break,
                 Ok(bytesin) => pos += bytesin,
